@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Search, ChevronLeft, Minus, Plus, X, SendHorizontal, CheckCircle2, ShoppingCart } from 'lucide-react';
+import { Search, ChevronLeft, X, SendHorizontal, CheckCircle2, ShoppingCart } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TABLES, MENU_ITEMS } from './data/mockData';
 import type { MenuItem, OrderItem } from './data/mockData';
