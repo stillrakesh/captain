@@ -175,6 +175,7 @@ const App = () => {
           table_number: table.number,
           items: order.map(i => ({ name: i.name, quantity: i.quantity, price: i.price })),
           notes,
+          status: 'NEW'
         }),
       });
       if (res.ok) {
