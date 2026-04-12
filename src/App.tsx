@@ -2,6 +2,8 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Search, ChevronLeft, SendHorizontal, CheckCircle2, RefreshCw, LayoutGrid, Clock, UtensilsCrossed, ReceiptText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_BASE } from './config';
+import socket from './services/socket';
+import { submitOrder, syncOfflineOrders, OrderPayload } from './services/api';
 import './index.css';
 
 // --- TYPES ---
@@ -129,8 +131,25 @@ const App = () => {
 
   useEffect(() => {
     fetchData();
+    syncOfflineOrders();
+    
+    // Socket Listeners
+    socket.on('connect', () => console.log('Connected to real-time server'));
+    socket.on('order_created', () => {
+      console.log('Order created on backend');
+      fetchData(true);
+    });
+    socket.on('order_updated', () => {
+      console.log('Order updated on backend');
+      fetchData(true);
+    });
+
     const interval = setInterval(() => fetchData(true), 6000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      socket.off('order_created');
+      socket.off('order_updated');
+    };
   }, [fetchData]);
 
   const table = useMemo(() => tables.find(t => t.id === tableId), [tables, tableId]);
@@ -167,32 +186,32 @@ const App = () => {
   const submit = async () => {
     if (!order.length || !table) return;
     setSending(true);
+    
+    const payload: OrderPayload = {
+      table_number: table.number,
+      items: order.map(i => ({ name: i.name, quantity: i.quantity, price: i.price })),
+      notes,
+      status: 'NEW'
+    };
+
     try {
-      const res = await fetch(`${API_BASE}/orders`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          table_number: table.number,
-          items: order.map(i => ({ name: i.name, quantity: i.quantity, price: i.price })),
-          notes,
-          status: 'NEW'
-        }),
-      });
-      if (res.ok) {
-        setSent(true);
-        setTimeout(() => { 
-          setSent(false); 
-          setOrder([]); 
-          setNotes(''); 
-          setTableId(null); 
-          setShowCart(false);
-          fetchData(true);
-        }, 1500);
-      } else {
-        alert('Failed. Retry.');
-      }
-    } catch {
-      alert('Network error.');
+      await submitOrder(payload);
+      setSent(true);
+      setTimeout(() => { 
+        setSent(false); 
+        setOrder([]); 
+        setNotes(''); 
+        setTableId(null); 
+        setShowCart(false);
+        fetchData(true);
+      }, 1500);
+    } catch (err) {
+      console.error(err);
+      // Even if it fails, the submitOrder handles offline storage
+      alert('Network issue - order saved locally for sync.');
+      setOrder([]);
+      setTableId(null);
+      setShowCart(false);
     } finally {
       setSending(false);
     }
