@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Search, ChevronLeft, X, SendHorizontal, CheckCircle2, ShoppingCart, RefreshCw, LayoutGrid, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { API_BASE } from './config';
 import './index.css';
 
 // --- TYPES ---
@@ -37,7 +38,7 @@ interface BackendOrder {
   timestamp: string;
 }
 
-const BASE_URL = 'https://pos-roan-six.vercel.app';
+// Removed BASE_URL constant
 
 function useIsMobile() {
   const [mobile, setMobile] = useState(window.innerWidth < 768);
@@ -74,9 +75,9 @@ const App = () => {
     if (!silent) setLoading(true);
     try {
       const [tRes, mRes, oRes] = await Promise.all([
-        fetch(`${BASE_URL}/api/tables`),
-        fetch(`${BASE_URL}/api/menu`),
-        fetch(`${BASE_URL}/api/orders`)
+        fetch(`${API_BASE}/tables`),
+        fetch(`${API_BASE}/menu`),
+        fetch(`${API_BASE}/orders`)
       ]);
       
       const tData = await tRes.json();
@@ -168,7 +169,7 @@ const App = () => {
     if (!order.length || !table) return;
     setSending(true);
     try {
-      const res = await fetch(`${BASE_URL}/api/orders`, {
+      const res = await fetch(`${API_BASE}/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
