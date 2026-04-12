@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { Search, ChevronLeft, X, SendHorizontal, CheckCircle2, ShoppingCart, RefreshCw, LayoutGrid, Clock, UtensilsCrossed, ReceiptText } from 'lucide-react';
+import { Search, ChevronLeft, SendHorizontal, CheckCircle2, RefreshCw, LayoutGrid, Clock, UtensilsCrossed, ReceiptText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_BASE } from './config';
 import './index.css';
@@ -39,22 +39,11 @@ interface BackendOrder {
   timestamp: string;
 }
 
-function useIsMobile() {
-  const [mobile, setMobile] = useState(window.innerWidth < 768);
-  useEffect(() => {
-    const h = () => setMobile(window.innerWidth < 768);
-    window.addEventListener('resize', h);
-    return () => window.removeEventListener('resize', h);
-  }, []);
-  return mobile;
-}
-
 const App = () => {
   // Data State
   const [tables, setTables] = useState<Table[]>([]);
   const [menu, setMenu] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   // UI State
   const [tableId, setTableId] = useState<string | null>(null);
@@ -66,8 +55,6 @@ const App = () => {
   const [sent, setSent] = useState(false);
   const [showCart, setShowCart] = useState(false);
   
-  const isMobile = useIsMobile();
-
   // --- API FETCHERS ---
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -98,7 +85,7 @@ const App = () => {
         tableOrders.forEach(o => {
           o.items.forEach(i => {
             activeItemMap[i.name] = (activeItemMap[i.name] || 0) + i.quantity;
-            val += i.price * i.quantity;
+            val += (i.price || 0) * i.quantity;
           });
         });
 
@@ -120,7 +107,7 @@ const App = () => {
 
       // Normalize Menu
       let fetchedMenu: MenuItem[] = [];
-      const rawItems = mData.menu || mData.items || []; // Backend changed back and forth
+      const rawItems = mData.menu || mData.items || [];
       if (Array.isArray(rawItems)) {
         fetchedMenu = rawItems.map((i: any) => ({
           id: String(i.id),
@@ -133,9 +120,7 @@ const App = () => {
 
       setTables(fetchedTables);
       setMenu(fetchedMenu);
-      setError(null);
     } catch (err) {
-      if (!silent) setError('Connection failed.');
       console.error(err);
     } finally {
       if (!silent) setLoading(false);
@@ -150,7 +135,6 @@ const App = () => {
 
   const table = useMemo(() => tables.find(t => t.id === tableId), [tables, tableId]);
   
-  // Dynamic categories with proper sorting
   const categories = useMemo(() => {
     const cats = Array.from(new Set(menu.map(i => i.category))).filter(Boolean);
     return ['All', ...cats.sort()];
@@ -231,7 +215,6 @@ const App = () => {
     );
   }
 
-  // ══════ TABLE SELECTION ══════
   if (!table) {
     return (
       <div style={{ minHeight: '100vh', background: '#f1f5f9' }}>
@@ -272,7 +255,6 @@ const App = () => {
                 }}
               >
                 {isOcc && <div style={{ position: 'absolute', top: 0, right: 0, padding: '4px 12px', background: '#821a1d', color: '#fff', fontSize: '9px', fontWeight: 900, borderBottomLeftRadius: '12px', letterSpacing: '0.05em' }}>RUNNING</div>}
-                
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: '28px', fontWeight: 900, color: isOcc ? '#821a1d' : '#1e293b' }}>{t.number}</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#94a3b8' }}>
@@ -280,7 +262,6 @@ const App = () => {
                     <span style={{ fontSize: '11px', fontWeight: 700 }}>{t.capacity}</span>
                   </div>
                 </div>
-
                 <div>
                   {isOcc ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -305,7 +286,6 @@ const App = () => {
     );
   }
 
-  // ══════ ORDERING VIEW ══════
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#f8fafc', overflow: 'hidden' }}>
       <header style={{ background: '#821a1d', color: '#fff', padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
@@ -319,7 +299,6 @@ const App = () => {
         <button onClick={reset} style={{ color: '#fff', background: 'rgba(255,255,255,0.2)', borderRadius: '8px', padding: '6px 14px', fontSize: '12px', fontWeight: 800 }}>CLOSE</button>
       </header>
 
-      {/* Categories & Search */}
       <div style={{ background: '#fff', borderBottom: '1px solid #e2e8f0', padding: '12px', flexShrink: 0 }}>
         <div style={{ position: 'relative', marginBottom: '12px' }}>
           <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }} />
@@ -339,7 +318,6 @@ const App = () => {
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '16px' }} className="hide-scrollbar">
-        {/* RUNNING ORDER SUMMARY (New Feature) */}
         {table.activeItems && table.activeItems.length > 0 && (
           <div style={{ background: '#fff', borderRadius: '16px', border: '1px dashed #cbd5e1', padding: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
@@ -356,7 +334,6 @@ const App = () => {
           </div>
         )}
 
-        {/* Menu Grid */}
         <div>
           <p style={{ fontSize: '14px', fontWeight: 900, marginBottom: '12px', color: '#64748b' }}>{category} Items</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
@@ -414,9 +391,12 @@ const App = () => {
             <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 30 }}
               style={{ position: 'fixed', bottom: 0, left: 0, right: 0, maxHeight: '90vh', zIndex: 50, background: '#fff', borderTopLeftRadius: '28px', borderTopRightRadius: '28px', display: 'flex', flexDirection: 'column' }}>
               <div style={{ display: 'flex', justifyContent: 'center', padding: '14px 0 6px' }}><div style={{ width: '44px', height: '5px', borderRadius: '5px', background: '#e2e8f0' }} /></div>
-              <div style={{ padding: '8px 24px 16px', borderBottom: '1px solid #f1f5f9' }}>
-                <h2 style={{ fontSize: '20px', fontWeight: 900 }}>KOT Confirmation</h2>
-                <p style={{ fontSize: '13px', color: '#64748b' }}>Confirm new items for Table {table.number}</p>
+              <div style={{ padding: '8px 24px 16px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h2 style={{ fontSize: '20px', fontWeight: 900 }}>KOT Confirmation</h2>
+                  <p style={{ fontSize: '13px', color: '#64748b' }}>Confirm new items for Table {table.number}</p>
+                </div>
+                <button onClick={() => setShowCart(false)} style={{ color: '#64748b', fontSize: '24px', fontWeight: 900, background: 'none', border: 'none', cursor: 'pointer' }}>×</button>
               </div>
               <div style={{ flex: 1, overflowY: 'auto', padding: '10px 24px' }}>
                 {order.map(item => (
