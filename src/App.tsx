@@ -67,13 +67,45 @@ const App = () => {
         fetch(`${BASE_URL}/api/menu`)
       ]);
       
-      if (!tRes.ok || !mRes.ok) throw new Error('Failed to fetch data');
-
       const tData = await tRes.json();
       const mData = await mRes.json();
 
-      setTables(tData);
-      setMenu(mData);
+      // Normalize Tables
+      const fetchedTables = (tData.tables || tData).map((t: any) => ({
+        id: String(t.id),
+        number: String(t.table_number || t.number),
+        status: (t.status || 'available').toLowerCase(),
+        capacity: t.capacity || 4
+      }));
+
+      // Normalize Menu (Flatten if grouped)
+      let fetchedMenu: MenuItem[] = [];
+      if (mData.menu && !Array.isArray(mData.menu)) {
+          // Grouped format: { category: [items] }
+          Object.keys(mData.menu).forEach(cat => {
+              mData.menu[cat].forEach((item: any) => {
+                  fetchedMenu.push({
+                      id: String(item.id),
+                      name: item.name,
+                      price: item.price,
+                      category: item.category || cat,
+                      isVeg: item.isVeg !== undefined ? item.isVeg : true // Default to veg if not specified
+                  });
+              });
+          });
+      } else {
+          // Flat array format
+          fetchedMenu = (mData.menu || mData).map((i: any) => ({
+              id: String(i.id),
+              name: i.name,
+              price: i.price,
+              category: i.category,
+              isVeg: i.isVeg !== undefined ? i.isVeg : true
+          }));
+      }
+
+      setTables(fetchedTables);
+      setMenu(fetchedMenu);
     } catch (err) {
       setError('Connection failed. Please check your internet.');
       console.error(err);
@@ -134,7 +166,6 @@ const App = () => {
           setNotes(''); 
           setTableId(null); 
           setShowCart(false);
-          // Refresh table status after order
           fetchData();
         }, 2000);
       } else {
@@ -193,18 +224,14 @@ const App = () => {
             <button key={t.id} onClick={() => setTableId(t.id)} style={{
               background: '#fff', border: t.status === 'occupied' ? '2px solid #821a1d' : '1px solid #e2e8f0',
               borderRadius: '12px', padding: '18px 10px', textAlign: 'center',
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px',
-              transition: 'transform 0.1s active', transform: 'scale(1)'
-            }}
-            onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.95)'}
-            onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
-            >
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px'
+            }}>
               <span style={{ fontSize: '26px', fontWeight: 900, color: t.status === 'occupied' ? '#821a1d' : '#1e293b' }}>{t.number}</span>
               <span style={{
                 fontSize: '9px', fontWeight: 800, letterSpacing: '0.06em', padding: '2px 8px', borderRadius: '20px',
                 background: t.status === 'available' ? '#f0fdf4' : t.status === 'occupied' ? '#fef2f2' : '#fef9c3',
                 color: t.status === 'available' ? '#16a34a' : t.status === 'occupied' ? '#dc2626' : '#a16207',
-              }}>{t.status === 'available' ? 'VACANT' : t.status === 'occupied' ? 'RUNNING' : 'DIRTY'}</span>
+              }}>{t.status.toUpperCase() === 'AVAILABLE' ? 'VACANT' : t.status.toUpperCase() === 'OCCUPIED' ? 'RUNNING' : 'DIRTY'}</span>
               <span style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 600 }}>{t.capacity} seats</span>
             </button>
           ))}
@@ -301,7 +328,7 @@ const App = () => {
                       <div style={{ display: 'flex', alignItems: 'center', border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden' }}>
                         <button onClick={() => dec(item.id)} style={{ width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', fontWeight: 700, fontSize: '20px' }}>−</button>
                         <span style={{ width: '40px', textAlign: 'center', fontWeight: 900, fontSize: '16px' }}>{item.quantity}</span>
-                        <button onClick={() => add(item)} style={{ width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', fontWeight: 700, fontSize: '20px' }}>+</button>
+                        <button onClick={() => add(menu.find(m => m.id === item.id) || ({} as any))} style={{ width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', fontWeight: 700, fontSize: '20px' }}>+</button>
                       </div>
                     </div>
                   ))}
