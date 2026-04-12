@@ -129,7 +129,7 @@ const App = () => {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(() => fetchData(true), 12000);
+    const interval = setInterval(() => fetchData(true), 6000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
