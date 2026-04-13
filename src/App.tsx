@@ -55,6 +55,7 @@ const App = () => {
   const [notes, setNotes] = useState('');
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [showCart, setShowCart] = useState(false);
   
   // --- API FETCHERS ---
@@ -195,6 +196,7 @@ const App = () => {
     };
 
     try {
+      setError(null);
       await submitOrder(payload);
       setSent(true);
       setTimeout(() => { 
@@ -205,13 +207,9 @@ const App = () => {
         setShowCart(false);
         fetchData(true);
       }, 1500);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      // Even if it fails, the submitOrder handles offline storage
-      alert('Network issue - order saved locally for sync.');
-      setOrder([]);
-      setTableId(null);
-      setShowCart(false);
+      setError(err.message || 'Network error - floor might be disconnected.');
     } finally {
       setSending(false);
     }
@@ -466,6 +464,30 @@ const App = () => {
               </div>
               <h3 style={{ fontSize: '22px', fontWeight: 900 }}>KOT SENT!</h3>
               <p style={{ fontSize: '14px', color: '#64748b', marginTop: '10px' }}>Kitchen has received the new items.</p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {error && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+            <motion.div initial={{ scale: 0.8 }} animate={{ scale: 1 }} style={{ background: '#fff', borderRadius: '32px', padding: '40px 24px', textAlign: 'center', width: '85%', maxWidth: '360px' }}>
+              <div style={{ width: '70px', height: '70px', borderRadius: '50%', background: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+                <RefreshCw size={40} color="#ef4444" />
+              </div>
+              <h3 style={{ fontSize: '22px', fontWeight: 900 }}>ORDER FAILED</h3>
+              <p style={{ fontSize: '14px', color: '#64748b', marginTop: '10px' }}>{error}</p>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '24px' }}>
+                <button onClick={submit} style={{ background: '#821a1d', color: '#fff', borderRadius: '16px', padding: '16px', fontSize: '15px', fontWeight: 900, border: 'none' }}>
+                  RETRY SENDING
+                </button>
+                <button onClick={() => setError(null)} style={{ background: '#f1f5f9', color: '#64748b', borderRadius: '16px', padding: '16px', fontSize: '15px', fontWeight: 800, border: 'none' }}>
+                  CANCEL
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
