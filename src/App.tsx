@@ -1,9 +1,9 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { Search, ChevronLeft, SendHorizontal, CheckCircle2, RefreshCw, LayoutGrid, Clock, UtensilsCrossed, ReceiptText } from 'lucide-react';
+import { Search, ChevronLeft, SendHorizontal, CheckCircle2, RefreshCw, LayoutGrid, Clock, UtensilsCrossed, ReceiptText, Settings, Wifi, WifiOff, Save } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { API_BASE } from './config';
-import socket from './services/socket';
-import { submitOrder, syncOfflineOrders, OrderPayload } from './services/api';
+import { getBackendURL } from './config';
+import socket, { reconnectSocket } from './services/socket';
+import { submitOrder, syncOfflineOrders, type OrderPayload } from './services/api';
 import './index.css';
 
 // --- TYPES ---
@@ -57,20 +57,30 @@ const App = () => {
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCart, setShowCart] = useState(false);
+  const [showSettings, setShowSettings] = useState(!localStorage.getItem('backend_url'));
+  const [backendUrlInput, setBackendUrlInput] = useState(localStorage.getItem('backend_url') || '');
+  const [connected, setConnected] = useState(false);
   
   // --- API FETCHERS ---
   const fetchData = useCallback(async (silent = false) => {
+    const baseUrl = getBackendURL();
+    if (!baseUrl) {
+      if (!silent) setLoading(false);
+      return;
+    }
+
     if (!silent) setLoading(true);
     try {
       const [tRes, mRes, oRes] = await Promise.all([
-        fetch(`${API_BASE}/tables`),
-        fetch(`${API_BASE}/menu`),
-        fetch(`${API_BASE}/orders`)
+        fetch(`${baseUrl}/tables`),
+        fetch(`${baseUrl}/menu`),
+        fetch(`${baseUrl}/orders`)
       ]);
       
       const tData = await tRes.json();
       const mData = await mRes.json();
       const oData = await oRes.json();
+// ... (rest of normalization logic remains the same, I'll keep it concise in the target)
 
       const backendOrders: BackendOrder[] = oData.orders || [];
 
@@ -131,11 +141,21 @@ const App = () => {
   }, []);
 
   useEffect(() => {
+    const baseUrl = getBackendURL();
+    if (!baseUrl) {
+      setLoading(false);
+      return;
+    }
+
     fetchData();
     syncOfflineOrders();
     
     // Socket Listeners
-    socket.on('connect', () => console.log('Connected to real-time server'));
+    const onConnect = () => setConnected(true);
+    const onDisconnect = () => setConnected(false);
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
     socket.on('order_created', () => {
       console.log('Order created on backend');
       fetchData(true);
@@ -145,9 +165,13 @@ const App = () => {
       fetchData(true);
     });
 
+    if (socket.connected) setConnected(true);
+
     const interval = setInterval(() => fetchData(true), 6000);
     return () => {
       clearInterval(interval);
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
       socket.off('order_created');
       socket.off('order_updated');
     };
@@ -214,7 +238,7 @@ const App = () => {
       setSending(false);
     }
   };
-
+  
   const reset = () => { 
     setTableId(null); 
     setOrder([]); 
@@ -223,6 +247,55 @@ const App = () => {
     setCategory('All'); 
     setSearch(''); 
   };
+
+  const saveSettings = () => {
+    if (!backendUrlInput) return alert('Please enter a valid URL');
+    localStorage.setItem('backend_url', backendUrlInput);
+    reconnectSocket();
+    setShowSettings(false);
+    fetchData();
+  };
+
+  if (showSettings) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#f8fafc', display: 'flex', flexDirection: 'column' }}>
+        <header style={{ background: '#821a1d', color: '#fff', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <Settings size={22} />
+          <span style={{ fontWeight: 800, fontSize: '18px' }}>CONNECTION SETTINGS</span>
+        </header>
+
+        <div style={{ padding: '30px 20px', flex: 1 }}>
+          <div style={{ background: '#fff', borderRadius: '24px', padding: '24px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)', border: '1px solid #e2e8f0' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 900, marginBottom: '8px' }}>Server Configuration</h2>
+            <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '24px' }}>Enter the local IP and port of your POS backend server.</p>
+
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#475569', marginBottom: '8px' }}>BACKEND URL</label>
+              <input 
+                value={backendUrlInput}
+                onChange={e => setBackendUrlInput(e.target.value)}
+                placeholder="http://192.168.1.5:3000"
+                style={{ width: '100%', padding: '16px', border: '1px solid #e2e8f0', borderRadius: '14px', fontSize: '15px', outline: 'none', background: '#f1f5f9' }}
+              />
+            </div>
+
+            <button 
+              onClick={saveSettings}
+              style={{ width: '100%', background: '#821a1d', color: '#fff', padding: '18px', borderRadius: '16px', fontSize: '16px', fontWeight: 900, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}
+            >
+              <Save size={20} /> CONNECT TO SERVER
+            </button>
+          </div>
+
+          {!getBackendURL() && (
+            <div style={{ marginTop: '24px', padding: '16px', borderRadius: '16px', background: '#fef2f2', border: '1px solid #fee2e2', color: '#991b1b', fontSize: '14px', fontWeight: 700, textAlign: 'center' }}>
+              ⚠️ Please configure backend to start taking orders.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (loading && !tables.length) {
     return (
@@ -237,11 +310,21 @@ const App = () => {
     return (
       <div style={{ minHeight: '100vh', background: '#f1f5f9' }}>
         <header style={{ background: '#821a1d', color: '#fff', padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <LayoutGrid size={20} />
-            <span style={{ fontWeight: 800, fontSize: '16px', letterSpacing: '0.5px' }}>CAPTAIN DASHBOARD</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+               <LayoutGrid size={20} />
+               <span style={{ fontWeight: 800, fontSize: '16px', letterSpacing: '0.5px' }}>CAPTAIN</span>
+             </div>
+             <div style={{ width: '1px', height: '16px', background: 'rgba(255,255,255,0.3)', margin: '0 4px' }} />
+             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: connected ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)', padding: '4px 8px', borderRadius: '20px' }}>
+                {connected ? <Wifi size={12} color="#4ade80" /> : <WifiOff size={12} color="#f87171" />}
+                <span style={{ fontSize: '10px', fontWeight: 900, color: connected ? '#4ade80' : '#f87171' }}>{connected ? 'LIVE' : 'OFFLINE'}</span>
+             </div>
           </div>
-          <button onClick={() => fetchData()} style={{ color: '#fff', background: 'rgba(255,255,255,0.1)', padding: '6px', borderRadius: '10px' }}><RefreshCw size={20} className={loading ? 'animate-spin' : ''} /></button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button onClick={() => fetchData()} style={{ color: '#fff', background: 'rgba(255,255,255,0.1)', padding: '8px', borderRadius: '10px' }}><RefreshCw size={20} className={loading ? 'animate-spin' : ''} /></button>
+            <button onClick={() => setShowSettings(true)} style={{ color: '#fff', background: 'rgba(255,255,255,0.1)', padding: '8px', borderRadius: '10px' }}><Settings size={20} /></button>
+          </div>
         </header>
 
         <div style={{ padding: '24px 16px 16px' }}>
@@ -306,15 +389,21 @@ const App = () => {
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#f8fafc', overflow: 'hidden' }}>
-      <header style={{ background: '#821a1d', color: '#fff', padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <header style={{ background: '#821a1d', color: '#fff', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <button onClick={reset} style={{ color: '#fff', background: 'rgba(255,255,255,0.15)', padding: '6px', borderRadius: '10px' }}><ChevronLeft size={24} /></button>
-          <div>
-            <span style={{ fontWeight: 900, fontSize: '17px' }}>Table {table.number}</span>
-            <p style={{ fontSize: '10px', opacity: 0.8, fontWeight: 700 }}>READY TO ORDER</p>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 900, fontSize: '16px' }}>Table {table.number}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+               <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: connected ? '#4ade80' : '#f87171' }} />
+               <span style={{ fontSize: '9px', fontWeight: 900, color: connected ? '#4ade80' : '#f87171', opacity: 0.9 }}>{connected ? 'LIVE' : 'OFFLINE'}</span>
+            </div>
           </div>
         </div>
-        <button onClick={reset} style={{ color: '#fff', background: 'rgba(255,255,255,0.2)', borderRadius: '8px', padding: '6px 14px', fontSize: '12px', fontWeight: 800 }}>CLOSE</button>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={() => setShowSettings(true)} style={{ color: '#fff', background: 'rgba(255,255,255,0.1)', padding: '6px', borderRadius: '10px' }}><Settings size={20} /></button>
+          <button onClick={reset} style={{ color: '#fff', background: 'rgba(255,255,255,0.2)', borderRadius: '8px', padding: '6px 12px', fontSize: '11px', fontWeight: 800 }}>CLOSE</button>
+        </div>
       </header>
 
       <div style={{ background: '#fff', borderBottom: '1px solid #e2e8f0', padding: '12px', flexShrink: 0 }}>

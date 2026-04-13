@@ -1,4 +1,4 @@
-import { API_BASE } from '../config';
+import { getBackendURL } from '../config';
 
 export interface OrderItem {
   name: string;
@@ -14,7 +14,10 @@ export interface OrderPayload {
 }
 
 export const submitOrder = async (order: OrderPayload): Promise<any> => {
-  const response = await fetch(`${API_BASE}/orders`, {
+  const baseUrl = getBackendURL();
+  if (!baseUrl) throw new Error('Backend URL not configured');
+
+  const response = await fetch(`${baseUrl}/orders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(order),
@@ -28,6 +31,5 @@ export const submitOrder = async (order: OrderPayload): Promise<any> => {
   return await response.json();
 };
 
-// These are no longer used but kept empty to avoid breaking imports elsewhere if any
 export const syncOfflineOrders = async () => {};
 export const getOfflineOrders = () => [];

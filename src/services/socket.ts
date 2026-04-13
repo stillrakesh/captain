@@ -1,11 +1,27 @@
-import { io } from 'socket.io-client';
-import { API_BASE } from '../config';
+import { io, Socket } from 'socket.io-client';
+import { getBackendURL } from '../config';
 
-const socket = io(API_BASE.replace('/api', ''), {
-  autoConnect: true,
-  reconnection: true,
-  reconnectionAttempts: Infinity,
-  reconnectionDelay: 1000,
-});
+let socket: Socket | null = null;
 
-export default socket;
+export const getSocket = (): Socket => {
+  if (!socket) {
+    const url = getBackendURL();
+    socket = io(url, {
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+    });
+  }
+  return socket;
+};
+
+export const reconnectSocket = () => {
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+  }
+  return getSocket();
+};
+
+export default getSocket();

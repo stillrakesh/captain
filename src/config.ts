@@ -1,1 +1,2 @@
-export const API_BASE = 'http://192.168.1.5:3000';
+export const getBackendURL = () => localStorage.getItem('backend_url') || '';
+export const API_BASE = getBackendURL();
