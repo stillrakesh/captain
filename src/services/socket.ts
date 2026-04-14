@@ -6,6 +6,8 @@ let socket: Socket | null = null;
 export const getSocket = (): Socket => {
   if (!socket) {
     const url = getBackendURL();
+    console.log(`[Socket] Connecting to: ${url}`);
+    
     socket = io(url, {
       autoConnect: true,
       reconnection: true,
@@ -18,7 +20,8 @@ export const getSocket = (): Socket => {
 
 export const reconnectSocket = () => {
   if (socket) {
-    socket.disconnect();
+    console.log('[Socket] Disconnecting previous connection');
+    socket.close();
     socket = null;
   }
   return getSocket();

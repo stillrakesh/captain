@@ -32,14 +32,7 @@ interface OrderItem {
   quantity: number;
 }
 
-interface BackendOrder {
-  id: number;
-  table_number: string;
-  items: { name: string; quantity: number; price: number }[];
-  notes: string;
-  status: string;
-  timestamp: string;
-}
+
 
 const App = () => {
   // Data State
@@ -56,11 +49,12 @@ const App = () => {
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [showCart, setShowCart] = useState(false);
   const [showSettings, setShowSettings] = useState(!localStorage.getItem('backend_url'));
   const [backendUrlInput, setBackendUrlInput] = useState(localStorage.getItem('backend_url') || '');
   const [connected, setConnected] = useState(false);
-  
+
   // --- API FETCHERS ---
   const fetchData = useCallback(async (silent = false) => {
     const baseUrl = getBackendURL();
@@ -70,71 +64,44 @@ const App = () => {
     }
 
     if (!silent) setLoading(true);
+    setFetchError(null);
+
     try {
-      const [tRes, mRes, oRes] = await Promise.all([
+      const [tRes, mRes] = await Promise.all([
         fetch(`${baseUrl}/tables`),
-        fetch(`${baseUrl}/menu`),
-        fetch(`${baseUrl}/orders`)
+        fetch(`${baseUrl}/menu`)
       ]);
+
+      if (!tRes.ok || !mRes.ok) throw new Error('Backend failed to respond');
+
+      const rawTables = await tRes.json();
+      const rawMenu = await mRes.json();
+
+      // 1. Process Tables (Standardized for OCCUPIED/FREE)
+      const fetchedTables: Table[] = rawTables.map((t: any) => ({
+        id: String(t.id),
+        number: t.name.replace('Table ', ''),
+        status: t.status === 'occupied' ? 'occupied' : 'available',
+        capacity: 4, 
+        orderCount: (t.items || t.orders || []).length,
+        orderValue: t.total || 0,
+        activeItems: (t.items || t.orders || []).map((i: any) => ({ name: i.name, quantity: i.qty || 1 }))
+      }));
       
-      const tData = await tRes.json();
-      const mData = await mRes.json();
-      const oData = await oRes.json();
-// ... (rest of normalization logic remains the same, I'll keep it concise in the target)
-
-      const backendOrders: BackendOrder[] = oData.orders || [];
-
-      // Normalize Tables and merge with order info
-      const fetchedTables = (tData.tables || []).map((t: any) => {
-        const tableNumRaw = t.name || t.table_number || t.number;
-        const tableNum = String(tableNumRaw).replace(/Table\s+/i, '');
-        
-        // Find if this table has a running order
-        const tableOrders = backendOrders.filter(o => String(o.table_number) === tableNum);
-        
-        // Aggregate all items for this table
-        const activeItemMap: Record<string, number> = {};
-        let val = 0;
-        tableOrders.forEach(o => {
-          o.items.forEach(i => {
-            activeItemMap[i.name] = (activeItemMap[i.name] || 0) + i.quantity;
-            val += (i.price || 0) * i.quantity;
-          });
-        });
-
-        const activeItems = Object.keys(activeItemMap).map(name => ({
-          name,
-          quantity: activeItemMap[name]
-        }));
-
-        return {
-          id: String(t.id),
-          number: tableNum,
-          status: activeItems.length > 0 ? 'occupied' : (t.status === 'blank' ? 'available' : t.status || 'available').toLowerCase(),
-          capacity: t.seats || t.capacity || 4,
-          orderCount: activeItems.reduce((s, i) => s + i.quantity, 0),
-          orderValue: val,
-          activeItems: activeItems
-        };
-      });
-
-      // Normalize Menu
-      let fetchedMenu: MenuItem[] = [];
-      const rawItems = mData.menu || mData.items || [];
-      if (Array.isArray(rawItems)) {
-        fetchedMenu = rawItems.map((i: any) => ({
-          id: String(i.id),
-          name: i.name,
-          price: i.price,
-          category: i.cat || i.category,
-          isVeg: (i.type || '').toLowerCase() === 'veg'
-        }));
-      }
+      // 2. Process Menu
+      const fetchedMenu: MenuItem[] = rawMenu.map((i: any) => ({
+        id: String(i.id),
+        name: i.name,
+        price: Number(i.price),
+        category: i.category || 'General',
+        isVeg: (i.type || '').toLowerCase() === 'veg'
+      }));
 
       setTables(fetchedTables);
       setMenu(fetchedMenu);
     } catch (err) {
-      console.error(err);
+      console.error('[CaptainApp] Fetch Error:', err);
+      setFetchError('Failed to load data from backend. Check settings.');
     } finally {
       if (!silent) setLoading(false);
     }
@@ -149,7 +116,7 @@ const App = () => {
 
     fetchData();
     syncOfflineOrders();
-    
+
     // Socket Listeners
     const onConnect = () => setConnected(true);
     const onDisconnect = () => setConnected(false);
@@ -163,6 +130,32 @@ const App = () => {
     socket.on('order_updated', () => {
       console.log('Order updated on backend');
       fetchData(true);
+    });
+    socket.on('table_updated', (data: any) => {
+      console.log('Table updated on backend');
+      // If it's a bulk update or deletion
+      if (data.tables) {
+        fetchData(true);
+      } else {
+        // Direct update for a single table
+        setTables(prev => prev.map(t => String(t.id) === String(data.id) ? {
+          ...t,
+          status: (data.status || 'VACANT').toLowerCase(),
+          orderCount: (data.orders || []).reduce((s: number, o: any) => s + (o.items || []).length, 0)
+        } : t));
+      }
+    });
+
+    socket.on('menu_updated', (newMenu: any[]) => {
+      console.log('Menu updated on backend');
+      const fetchedMenu: MenuItem[] = newMenu.map((i: any) => ({
+        id: String(i.id),
+        name: i.name || 'Unknown Item',
+        price: Number(i.price) || 0,
+        category: i.category || i.cat || 'General',
+        isVeg: (i.is_veg !== undefined ? i.is_veg : (i.type || '').toLowerCase() === 'veg')
+      }));
+      setMenu(fetchedMenu);
     });
 
     if (socket.connected) setConnected(true);
@@ -178,7 +171,7 @@ const App = () => {
   }, [fetchData]);
 
   const table = useMemo(() => tables.find(t => t.id === tableId), [tables, tableId]);
-  
+
   const categories = useMemo(() => {
     const cats = Array.from(new Set(menu.map(i => i.category))).filter(Boolean);
     return ['All', ...cats.sort()];
@@ -211,10 +204,10 @@ const App = () => {
   const submit = async () => {
     if (!order.length || !table) return;
     setSending(true);
-    
+
     const payload: OrderPayload = {
-      table_number: table.number,
-      items: order.map(i => ({ name: i.name, quantity: i.quantity, price: i.price })),
+      tableId: table.id,
+      items: order.map(i => ({ name: i.name, qty: i.quantity, price: i.price })),
       notes,
       status: 'NEW'
     };
@@ -222,14 +215,17 @@ const App = () => {
     try {
       setError(null);
       await submitOrder(payload);
+
+      // 🔥 Important: Reload immediately after success
+      fetchData(true);
+
       setSent(true);
-      setTimeout(() => { 
-        setSent(false); 
-        setOrder([]); 
-        setNotes(''); 
-        setTableId(null); 
+      setTimeout(() => {
+        setSent(false);
+        setOrder([]);
+        setNotes('');
+        setTableId(null);
         setShowCart(false);
-        fetchData(true);
       }, 1500);
     } catch (err: any) {
       console.error(err);
@@ -238,14 +234,14 @@ const App = () => {
       setSending(false);
     }
   };
-  
-  const reset = () => { 
-    setTableId(null); 
-    setOrder([]); 
-    setNotes(''); 
-    setShowCart(false); 
-    setCategory('All'); 
-    setSearch(''); 
+
+  const reset = () => {
+    setTableId(null);
+    setOrder([]);
+    setNotes('');
+    setShowCart(false);
+    setCategory('All');
+    setSearch('');
   };
 
   const saveSettings = () => {
@@ -271,7 +267,7 @@ const App = () => {
 
             <div style={{ marginBottom: '24px' }}>
               <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#475569', marginBottom: '8px' }}>BACKEND URL</label>
-              <input 
+              <input
                 value={backendUrlInput}
                 onChange={e => setBackendUrlInput(e.target.value)}
                 placeholder="http://192.168.1.5:3000"
@@ -279,7 +275,7 @@ const App = () => {
               />
             </div>
 
-            <button 
+            <button
               onClick={saveSettings}
               style={{ width: '100%', background: '#821a1d', color: '#fff', padding: '18px', borderRadius: '16px', fontSize: '16px', fontWeight: 900, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}
             >
@@ -306,20 +302,34 @@ const App = () => {
     );
   }
 
+  if (fetchError && !tables.length) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', flexDirection: 'column', padding: '20px', textAlign: 'center' }}>
+        <WifiOff size={48} color="#ef4444" />
+        <h2 style={{ marginTop: '20px', fontWeight: 900, fontSize: '20px' }}>CONNECTION FAILED</h2>
+        <p style={{ marginTop: '10px', color: '#64748b', fontSize: '14px' }}>{fetchError}</p>
+        <div style={{ display: 'flex', gap: '10px', marginTop: '30px' }}>
+          <button onClick={() => fetchData()} style={{ background: '#821a1d', color: '#fff', padding: '12px 24px', borderRadius: '12px', fontWeight: 900 }}>RETRY</button>
+          <button onClick={() => setShowSettings(true)} style={{ background: '#f1f5f9', color: '#64748b', padding: '12px 24px', borderRadius: '12px', fontWeight: 900 }}>SETTINGS</button>
+        </div>
+      </div>
+    );
+  }
+
   if (!table) {
     return (
       <div style={{ minHeight: '100vh', background: '#f1f5f9' }}>
         <header style={{ background: '#821a1d', color: '#fff', padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-               <LayoutGrid size={20} />
-               <span style={{ fontWeight: 800, fontSize: '16px', letterSpacing: '0.5px' }}>CAPTAIN</span>
-             </div>
-             <div style={{ width: '1px', height: '16px', background: 'rgba(255,255,255,0.3)', margin: '0 4px' }} />
-             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: connected ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)', padding: '4px 8px', borderRadius: '20px' }}>
-                {connected ? <Wifi size={12} color="#4ade80" /> : <WifiOff size={12} color="#f87171" />}
-                <span style={{ fontSize: '10px', fontWeight: 900, color: connected ? '#4ade80' : '#f87171' }}>{connected ? 'LIVE' : 'OFFLINE'}</span>
-             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <LayoutGrid size={20} />
+              <span style={{ fontWeight: 800, fontSize: '16px', letterSpacing: '0.5px' }}>CAPTAIN</span>
+            </div>
+            <div style={{ width: '1px', height: '16px', background: 'rgba(255,255,255,0.3)', margin: '0 4px' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: connected ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)', padding: '4px 8px', borderRadius: '20px' }}>
+              {connected ? <Wifi size={12} color="#4ade80" /> : <WifiOff size={12} color="#f87171" />}
+              <span style={{ fontSize: '10px', fontWeight: 900, color: connected ? '#4ade80' : '#f87171' }}>{connected ? 'LIVE' : 'OFFLINE'}</span>
+            </div>
           </div>
           <div style={{ display: 'flex', gap: '10px' }}>
             <button onClick={() => fetchData()} style={{ color: '#fff', background: 'rgba(255,255,255,0.1)', padding: '8px', borderRadius: '10px' }}><RefreshCw size={20} className={loading ? 'animate-spin' : ''} /></button>
@@ -336,19 +346,19 @@ const App = () => {
           {tables.map(t => {
             const isOcc = t.status === 'occupied';
             return (
-              <motion.button 
+              <motion.button
                 whileHover={{ y: -2 }}
                 whileTap={{ scale: 0.96 }}
-                key={t.id} 
-                onClick={() => setTableId(t.id)} 
+                key={t.id}
+                onClick={() => setTableId(t.id)}
                 style={{
-                  background: '#fff', 
+                  background: '#fff',
                   border: isOcc ? '2px solid #821a1d' : '1px solid #e2e8f0',
-                  borderRadius: '20px', 
-                  padding: '24px 20px', 
+                  borderRadius: '20px',
+                  padding: '24px 20px',
                   textAlign: 'left',
-                  display: 'flex', 
-                  flexDirection: 'column', 
+                  display: 'flex',
+                  flexDirection: 'column',
                   gap: '12px',
                   boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)',
                   position: 'relative',
@@ -366,16 +376,16 @@ const App = () => {
                 <div>
                   {isOcc ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <UtensilsCrossed size={14} color="#64748b" />
-                          <span style={{ fontSize: '13px', fontWeight: 700, color: '#64748b' }}>{t.orderCount} Items</span>
-                       </div>
-                       <span style={{ fontSize: '16px', fontWeight: 900, color: '#821a1d' }}>₹{t.orderValue}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <UtensilsCrossed size={14} color="#64748b" />
+                        <span style={{ fontSize: '13px', fontWeight: 700, color: '#64748b' }}>{t.orderCount} Items</span>
+                      </div>
+                      <span style={{ fontSize: '16px', fontWeight: 900, color: '#821a1d' }}>₹{t.orderValue}</span>
                     </div>
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e' }} />
-                        <span style={{ fontSize: '13px', fontWeight: 700, color: '#22c55e' }}>VACANT</span>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e' }} />
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: '#22c55e' }}>VACANT</span>
                     </div>
                   )}
                 </div>
@@ -395,12 +405,31 @@ const App = () => {
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <span style={{ fontWeight: 900, fontSize: '16px' }}>Table {table.number}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-               <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: connected ? '#4ade80' : '#f87171' }} />
-               <span style={{ fontSize: '9px', fontWeight: 900, color: connected ? '#4ade80' : '#f87171', opacity: 0.9 }}>{connected ? 'LIVE' : 'OFFLINE'}</span>
+              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: connected ? '#4ade80' : '#f87171' }} />
+              <span style={{ fontSize: '9px', fontWeight: 900, color: connected ? '#4ade80' : '#f87171', opacity: 0.9 }}>{connected ? 'LIVE' : 'OFFLINE'}</span>
             </div>
           </div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
+          {table.status === 'occupied' && (
+            <button
+              onClick={async () => {
+                if (window.confirm(`Are you sure you want to clear Table ${table.number} and mark it as free?`)) {
+                  try {
+                    const baseUrl = getBackendURL();
+                    await fetch(`${baseUrl}/table/${table.id}/clear`, { method: 'POST' });
+                    reset();
+                    fetchData(true);
+                  } catch (err) {
+                    alert('Failed to clear table. Check connection.');
+                  }
+                }
+              }}
+              style={{ color: '#fff', background: 'rgba(255,255,255,0.2)', borderRadius: '8px', padding: '6px 12px', fontSize: '11px', fontWeight: 800 }}
+            >
+              CLEAR TABLE
+            </button>
+          )}
           <button onClick={() => setShowSettings(true)} style={{ color: '#fff', background: 'rgba(255,255,255,0.1)', padding: '6px', borderRadius: '10px' }}><Settings size={20} /></button>
           <button onClick={reset} style={{ color: '#fff', background: 'rgba(255,255,255,0.2)', borderRadius: '8px', padding: '6px 12px', fontSize: '11px', fontWeight: 800 }}>CLOSE</button>
         </div>
@@ -432,11 +461,11 @@ const App = () => {
               <span style={{ fontSize: '14px', fontWeight: 900, color: '#1e293b' }}>Running Order Items</span>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-               {table.activeItems.map((item, idx) => (
-                 <span key={idx} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>
-                   {item.name} <span style={{ color: '#821a1d', borderLeft: '1px solid #e2e8f0', marginLeft: '6px', paddingLeft: '6px' }}>{item.quantity}</span>
-                 </span>
-               ))}
+              {table.activeItems.map((item, idx) => (
+                <span key={idx} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, color: '#64748b' }}>
+                  {item.name} <span style={{ color: '#821a1d', borderLeft: '1px solid #e2e8f0', marginLeft: '6px', paddingLeft: '6px' }}>{item.quantity}</span>
+                </span>
+              ))}
             </div>
           </div>
         )}
@@ -448,7 +477,7 @@ const App = () => {
               const qty = getQty(item.id);
               return (
                 <div key={item.id} style={{
-                  background: '#fff', borderRadius: '16px', padding: '16px', 
+                  background: '#fff', borderRadius: '16px', padding: '16px',
                   border: qty > 0 ? '2px solid #821a1d' : '1px solid #eef2f6',
                   display: 'flex', flexDirection: 'column', gap: '10px', position: 'relative',
                   boxShadow: '0 1px 2px rgba(0,0,0,0.03)'
@@ -477,8 +506,8 @@ const App = () => {
 
       {totalQty > 0 && !showCart && (
         <motion.div initial={{ y: 100 }} animate={{ y: 0 }} style={{ position: 'fixed', bottom: '20px', left: '16px', right: '16px', zIndex: 30 }}>
-          <button onClick={() => setShowCart(true)} style={{ 
-            width: '100%', background: '#821a1d', color: '#fff', borderRadius: '18px', padding: '18px 24px', 
+          <button onClick={() => setShowCart(true)} style={{
+            width: '100%', background: '#821a1d', color: '#fff', borderRadius: '18px', padding: '18px 24px',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 10px 25px rgba(130,26,29,0.4)', border: 'none'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -520,8 +549,8 @@ const App = () => {
                   </div>
                 ))}
                 <div style={{ marginTop: '20px' }}>
-                   <p style={{ fontSize: '13px', fontWeight: 800, color: '#475569', marginBottom: '8px' }}>Kitchen Notes</p>
-                   <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="E.g. Extra spicy, no onions..."
+                  <p style={{ fontSize: '13px', fontWeight: 800, color: '#475569', marginBottom: '8px' }}>Kitchen Notes</p>
+                  <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="E.g. Extra spicy, no onions..."
                     style={{ width: '100%', padding: '14px', border: '1px solid #e2e8f0', borderRadius: '16px', fontSize: '14px', height: '80px', outline: 'none', background: '#f8fafc', resize: 'none' }} />
                 </div>
               </div>
@@ -568,7 +597,7 @@ const App = () => {
               </div>
               <h3 style={{ fontSize: '22px', fontWeight: 900 }}>ORDER FAILED</h3>
               <p style={{ fontSize: '14px', color: '#64748b', marginTop: '10px' }}>{error}</p>
-              
+
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '24px' }}>
                 <button onClick={submit} style={{ background: '#821a1d', color: '#fff', borderRadius: '16px', padding: '16px', fontSize: '15px', fontWeight: 900, border: 'none' }}>
                   RETRY SENDING

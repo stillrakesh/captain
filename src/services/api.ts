@@ -2,12 +2,12 @@ import { getBackendURL } from '../config';
 
 export interface OrderItem {
   name: string;
-  quantity: number;
+  qty: number;
   price: number;
 }
 
 export interface OrderPayload {
-  table_number: string;
+  tableId: string | number;
   items: OrderItem[];
   notes?: string;
   status: string;
@@ -17,7 +17,7 @@ export const submitOrder = async (order: OrderPayload): Promise<any> => {
   const baseUrl = getBackendURL();
   if (!baseUrl) throw new Error('Backend URL not configured');
 
-  const response = await fetch(`${baseUrl}/orders`, {
+  const response = await fetch(`${baseUrl}/order`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(order),
