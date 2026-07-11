@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { Search, ChevronLeft, SendHorizontal, CheckCircle2, RefreshCw, LayoutGrid, Clock, UtensilsCrossed, ReceiptText, Settings, Wifi, WifiOff, Save } from 'lucide-react';
+import { Search, ChevronLeft, SendHorizontal, CheckCircle2, RefreshCw, LayoutGrid, UtensilsCrossed, ReceiptText, Settings, Wifi, WifiOff, Save } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getBackendURL } from './config';
 import socket, { reconnectSocket } from './services/socket';
@@ -18,7 +18,7 @@ interface MenuItem {
 interface Table {
   id: string;
   number: string;
-  status: 'available' | 'occupied' | 'dirty';
+  status: 'draft' | 'kot_pending' | 'kot_printed' | 'billing' | 'vacant';
   capacity: number;
   orderCount?: number;
   orderValue?: number;
@@ -51,7 +51,14 @@ const App = () => {
   const [error, setError] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [showCart, setShowCart] = useState(false);
-  const [showSettings, setShowSettings] = useState(!localStorage.getItem('backend_url'));
+
+  const [showSettings, setShowSettings] = useState(() => {
+    const saved = localStorage.getItem('backend_url');
+    if (saved) return false;
+    const origin = window.location.origin;
+    const isDev = origin.includes(':5173') || origin.includes(':5174') || origin.includes(':5175');
+    return isDev;
+  });
   const [backendUrlInput, setBackendUrlInput] = useState(localStorage.getItem('backend_url') || '');
   const [connected, setConnected] = useState(false);
 
@@ -74,22 +81,27 @@ const App = () => {
 
       if (!tRes.ok || !mRes.ok) throw new Error('Backend failed to respond');
 
-      const rawTables = await tRes.json();
-      const rawMenu = await mRes.json();
-
-      // 1. Process Tables (Standardized for OCCUPIED/FREE)
+      const tData = await tRes.json();
+      const rawTables = Array.isArray(tData) ? tData : (tData.tables || []);
+      const rawMenuData = await mRes.json();
+      // Handle both flat array and {menu: {Cat: [items]}} grouped format
+      let safeMenu: any[] = [];
+      if (Array.isArray(rawMenuData)) safeMenu = rawMenuData;
+      else if (rawMenuData?.items && Array.isArray(rawMenuData.items)) safeMenu = rawMenuData.items;
+      else if (rawMenuData?.menu) safeMenu = Array.isArray(rawMenuData.menu) ? rawMenuData.menu : Object.values(rawMenuData.menu as Record<string, any[]>).flat();
+      // Process Tables — backend now emits canonical 'running'/'vacant'
       const fetchedTables: Table[] = rawTables.map((t: any) => ({
         id: String(t.id),
-        number: t.name.replace('Table ', ''),
-        status: t.status === 'occupied' ? 'occupied' : 'available',
-        capacity: 4, 
+        number: String(t.table_number || t.name || '').replace('Table ', ''),
+        status: t.status || 'vacant',
+        capacity: t.seats || 4,
         orderCount: (t.items || t.orders || []).length,
         orderValue: t.total || 0,
-        activeItems: (t.items || t.orders || []).map((i: any) => ({ name: i.name, quantity: i.qty || 1 }))
+        activeItems: (t.items || t.orders || []).map((i: any) => ({ name: i.name, quantity: i.qty || i.quantity || 1 }))
       }));
-      
-      // 2. Process Menu
-      const fetchedMenu: MenuItem[] = rawMenu.map((i: any) => ({
+
+      // Process Menu — flatten if needed
+      const fetchedMenu: MenuItem[] = safeMenu.map((i: any) => ({
         id: String(i.id),
         name: i.name,
         price: Number(i.price),
@@ -99,74 +111,98 @@ const App = () => {
 
       setTables(fetchedTables);
       setMenu(fetchedMenu);
-    } catch (err) {
+      console.log(`[Captain] Menu loaded: ${fetchedMenu.length} items`);
+    } catch (err: any) {
       console.error('[CaptainApp] Fetch Error:', err);
-      setFetchError('Failed to load data from backend. Check settings.');
+      let errorMsg = 'Failed to load data from backend. Check settings.';
+      
+      if (err.message?.includes('Failed to fetch')) {
+        errorMsg = 'NETWORK ERROR: Could not reach server. Ensure you are on the SAME Wi-Fi and using http:// (not https://).';
+      } else if (err.message) {
+        errorMsg = `ERROR: ${err.message}`;
+      }
+      
+      setFetchError(errorMsg);
     } finally {
       if (!silent) setLoading(false);
     }
   }, []);
 
+  // Helper: convert backend table to UI Table shape
+  const mapTable = (t: any): Table => ({
+    id: String(t.id),
+    number: String(t.table_number || t.name || '').replace('Table ', ''),
+    // Backend emits canonical 'running' | 'vacant'
+    status: t.status || 'vacant',
+    capacity: t.seats || 4,
+    orderCount: (t.items || t.orders || []).length,
+    orderValue: t.total || 0,
+    activeItems: (t.items || t.orders || []).map((i: any) => ({ name: i.name, quantity: i.qty || i.quantity || 1 }))
+  });
+
   useEffect(() => {
     const baseUrl = getBackendURL();
-    if (!baseUrl) {
-      setLoading(false);
-      return;
-    }
+    if (!baseUrl) { setLoading(false); return; }
 
     fetchData();
     syncOfflineOrders();
 
-    // Socket Listeners
     const onConnect = () => setConnected(true);
     const onDisconnect = () => setConnected(false);
-
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
-    socket.on('order_created', () => {
-      console.log('Order created on backend');
-      fetchData(true);
-    });
-    socket.on('order_updated', () => {
-      console.log('Order updated on backend');
-      fetchData(true);
-    });
-    socket.on('table_updated', (data: any) => {
-      console.log('Table updated on backend');
-      // If it's a bulk update or deletion
-      if (data.tables) {
-        fetchData(true);
-      } else {
-        // Direct update for a single table
-        setTables(prev => prev.map(t => String(t.id) === String(data.id) ? {
-          ...t,
-          status: (data.status || 'VACANT').toLowerCase(),
-          orderCount: (data.orders || []).reduce((s: number, o: any) => s + (o.items || []).length, 0)
-        } : t));
-      }
+
+    // table_updated: full tables array — replace state directly
+    socket.on('table_updated', (rawTables: any) => {
+      console.log('[Captain] table_updated:', Array.isArray(rawTables) ? rawTables.length : 'not array');
+      const safeTables = Array.isArray(rawTables) ? rawTables : [];
+      setTables(safeTables.map(mapTable));
     });
 
-    socket.on('menu_updated', (newMenu: any[]) => {
-      console.log('Menu updated on backend');
-      const fetchedMenu: MenuItem[] = newMenu.map((i: any) => ({
-        id: String(i.id),
-        name: i.name || 'Unknown Item',
-        price: Number(i.price) || 0,
-        category: i.category || i.cat || 'General',
-        isVeg: (i.is_veg !== undefined ? i.is_veg : (i.type || '').toLowerCase() === 'veg')
+    // order_updated: single table payload — patch the matching table
+    socket.on('order_updated', (payload: any) => {
+      console.log('[Captain] order_updated:', payload?.table_number);
+      if (!payload) return;
+      setTables(prev => prev.map(t => {
+        const match = String(t.id) === String(payload.id) ||
+                      String(t.id) === String(payload.table_id);
+        if (!match) return t;
+        return {
+          ...t,
+          status: payload.status || 'vacant',
+          orderCount: (payload.items || []).length,
+          orderValue: payload.total || 0,
+          activeItems: (payload.items || []).map((i: any) => ({ name: i.name, quantity: i.quantity || i.qty || 1 }))
+        };
       }));
-      setMenu(fetchedMenu);
+    });
+
+    // menu_updated: {categories, items} flat array per spec
+    socket.on('menu_updated', (payload: any) => {
+      console.log('[Captain] menu_updated');
+      const rawItems: any[] = Array.isArray(payload?.items)
+        ? payload.items
+        : Array.isArray(payload)
+          ? payload
+          : payload?.menu ? (Array.isArray(payload.menu) ? payload.menu : Object.values(payload.menu as Record<string, any[]>).flat())
+          : [];
+      setMenu(rawItems.map((i: any) => ({
+        id: String(i.id),
+        name: i.name,
+        price: Number(i.price),
+        category: i.category || 'General',
+        isVeg: (i.type || '').toLowerCase() === 'veg'
+      })));
     });
 
     if (socket.connected) setConnected(true);
 
-    const interval = setInterval(() => fetchData(true), 6000);
     return () => {
-      clearInterval(interval);
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
-      socket.off('order_created');
+      socket.off('table_updated');
       socket.off('order_updated');
+      socket.off('menu_updated');
     };
   }, [fetchData]);
 
@@ -207,6 +243,7 @@ const App = () => {
 
     const payload: OrderPayload = {
       tableId: table.id,
+      tableNumber: table.number,
       items: order.map(i => ({ name: i.name, qty: i.quantity, price: i.price })),
       notes,
       status: 'NEW'
@@ -245,19 +282,54 @@ const App = () => {
   };
 
   const saveSettings = () => {
-    if (!backendUrlInput) return alert('Please enter a valid URL');
-    localStorage.setItem('backend_url', backendUrlInput);
+    let url = backendUrlInput.trim();
+    if (!url) return alert('Please enter a valid URL');
+
+    // Auto-prefix http:// if missing
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'http://' + url;
+    }
+
+    // Auto-append default port 3001 if no port is specified
+    // We check if there's a colon after the protocol
+    const protocolEnd = url.indexOf('//') + 2;
+    if (!url.includes(':', protocolEnd)) {
+      url = url + ':3001';
+    }
+
+    localStorage.setItem('backend_url', url);
+    setBackendUrlInput(url);
     reconnectSocket();
     setShowSettings(false);
-    fetchData();
+    // Give state a moment to update before fetching
+    setTimeout(() => fetchData(), 100);
   };
 
   if (showSettings) {
     return (
       <div style={{ minHeight: '100vh', background: '#f8fafc', display: 'flex', flexDirection: 'column' }}>
-        <header style={{ background: '#821a1d', color: '#fff', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <Settings size={22} />
-          <span style={{ fontWeight: 800, fontSize: '18px' }}>CONNECTION SETTINGS</span>
+        <header style={{ background: '#821a1d', color: '#fff', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Settings size={22} />
+            <span style={{ fontWeight: 800, fontSize: '18px' }}>CONNECTION SETTINGS</span>
+          </div>
+          {getBackendURL() && (
+            <button
+              onClick={() => setShowSettings(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#fff',
+                fontSize: '20px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                padding: '4px 8px'
+              }}
+              title="Close"
+            >
+              ✕
+            </button>
+          )}
         </header>
 
         <div style={{ padding: '30px 20px', flex: 1 }}>
@@ -344,17 +416,18 @@ const App = () => {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px', padding: '0 16px 40px' }}>
           {tables.map(t => {
-            const isOcc = t.status === 'occupied';
+            const isOcc = t.status !== 'vacant';
             return (
               <motion.button
                 whileHover={{ y: -2 }}
                 whileTap={{ scale: 0.96 }}
                 key={t.id}
                 onClick={() => setTableId(t.id)}
+                className={`table-card status-${t.status || 'vacant'}`}
                 style={{
                   background: '#fff',
-                  border: isOcc ? '2px solid #821a1d' : '1px solid #e2e8f0',
-                  borderRadius: '20px',
+                  border: isOcc ? '2px solid transparent' : '1px solid #e2e8f0',
+                  borderRadius: '24px',
                   padding: '24px 20px',
                   textAlign: 'left',
                   display: 'flex',
@@ -365,12 +438,26 @@ const App = () => {
                   overflow: 'hidden'
                 }}
               >
-                {isOcc && <div style={{ position: 'absolute', top: 0, right: 0, padding: '4px 12px', background: '#821a1d', color: '#fff', fontSize: '9px', fontWeight: 900, borderBottomLeftRadius: '12px', letterSpacing: '0.05em' }}>RUNNING</div>}
+                {isOcc && (
+                  <div style={{ 
+                    position: 'absolute', top: 0, right: 0, padding: '4px 12px', 
+                    background: t.status === 'draft' ? '#2563eb' : 
+                                t.status === 'kot_pending' ? '#ca8a04' : 
+                                t.status === 'kot_printed' ? '#ea580c' : 
+                                t.status === 'billing' ? '#16a34a' : '#64748b', 
+                    color: '#fff', fontSize: '9px', fontWeight: 900, borderBottomLeftRadius: '12px', letterSpacing: '0.05em' 
+                  }}>
+                    {t.status === 'draft' ? '🔵 DRAFT' : 
+                     t.status === 'kot_pending' ? '🟡 KOT PENDING' : 
+                     t.status === 'kot_printed' ? '🟠 KOT PRINTED' : 
+                     t.status === 'billing' ? '🟢 BILLING' : 'RUNNING'}
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '28px', fontWeight: 900, color: isOcc ? '#821a1d' : '#1e293b' }}>{t.number}</span>
+                  <span style={{ fontSize: '28px', fontWeight: 950, color: isOcc ? '#0f172a' : '#1e293b' }}>{t.number}</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#94a3b8' }}>
-                    <Clock size={12} />
-                    <span style={{ fontSize: '11px', fontWeight: 700 }}>{t.capacity}</span>
+                    <LayoutGrid size={14} />
+                    <span style={{ fontSize: '11px', fontWeight: 800 }}>{t.capacity} Seats</span>
                   </div>
                 </div>
                 <div>
@@ -380,12 +467,12 @@ const App = () => {
                         <UtensilsCrossed size={14} color="#64748b" />
                         <span style={{ fontSize: '13px', fontWeight: 700, color: '#64748b' }}>{t.orderCount} Items</span>
                       </div>
-                      <span style={{ fontSize: '16px', fontWeight: 900, color: '#821a1d' }}>₹{t.orderValue}</span>
+                      <span style={{ fontSize: '16px', fontWeight: 950, color: '#0f172a' }}>₹{t.orderValue}</span>
                     </div>
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e' }} />
-                      <span style={{ fontSize: '13px', fontWeight: 700, color: '#22c55e' }}>VACANT</span>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#cbd5e1' }} />
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: '#94a3b8' }}>AVAILABLE</span>
                     </div>
                   )}
                 </div>
@@ -406,12 +493,14 @@ const App = () => {
             <span style={{ fontWeight: 900, fontSize: '16px' }}>Table {table.number}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
               <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: connected ? '#4ade80' : '#f87171' }} />
-              <span style={{ fontSize: '9px', fontWeight: 900, color: connected ? '#4ade80' : '#f87171', opacity: 0.9 }}>{connected ? 'LIVE' : 'OFFLINE'}</span>
+              <span style={{ fontSize: '9px', fontWeight: 900, color: connected ? '#4ade80' : '#f87171', opacity: 0.9 }}>
+                {connected ? 'LIVE' : 'OFFLINE'} | {menu.length} Items | {getBackendURL()}
+              </span>
             </div>
           </div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          {table.status === 'occupied' && (
+          {table.status !== 'vacant' && (
             <button
               onClick={async () => {
                 if (window.confirm(`Are you sure you want to clear Table ${table.number} and mark it as free?`)) {
@@ -445,9 +534,10 @@ const App = () => {
           {categories.map(c => (
             <button key={c} onClick={() => setCategory(c)} style={{
               padding: '8px 18px', borderRadius: '25px', fontSize: '13px', fontWeight: 800, whiteSpace: 'nowrap',
-              background: category === c ? '#821a1d' : '#f1f5f9',
-              color: category === c ? '#fff' : '#64748b',
-              transition: 'all 0.2s'
+              background: category === c ? '#fbbf24' : '#f1f5f9',
+              color: category === c ? '#000' : '#64748b',
+              transition: 'all 0.2s',
+              border: category === c ? '2px solid #b45309' : 'none'
             }}>{c}</button>
           ))}
         </div>
@@ -476,26 +566,31 @@ const App = () => {
             {items.map(item => {
               const qty = getQty(item.id);
               return (
-                <div key={item.id} style={{
-                  background: '#fff', borderRadius: '16px', padding: '16px',
-                  border: qty > 0 ? '2px solid #821a1d' : '1px solid #eef2f6',
-                  display: 'flex', flexDirection: 'column', gap: '10px', position: 'relative',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.03)'
-                }}>
+                <div 
+                  key={item.id} 
+                  onClick={() => add(item)}
+                  style={{
+                    background: '#fff', borderRadius: '16px', padding: '16px 20px',
+                    border: qty > 0 ? '2px solid #821a1d' : '1px solid #eef2f6',
+                    display: 'flex', flexDirection: 'column', gap: '4px', position: 'relative',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    transition: 'all 0.1s active',
+                    overflow: 'hidden',
+                    height: '80px',
+                    justifyContent: 'center'
+                  }}
+                  onMouseDown={(e) => { e.currentTarget.style.transform = 'scale(0.96)'; }}
+                  onMouseUp={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+                >
                   <div style={{ position: 'absolute', left: 0, top: '16px', bottom: '16px', width: '4px', background: item.isVeg ? '#22c55e' : '#ef4444', borderRadius: '0 4px 4px 0' }} />
-                  <div>
-                    <p style={{ fontSize: '14px', fontWeight: 800, lineHeight: 1.3 }}>{item.name}</p>
-                    <p style={{ fontSize: '16px', fontWeight: 900, color: '#821a1d', marginTop: '2px' }}>₹{item.price}</p>
+                  
+                  <div style={{ paddingLeft: '8px' }}>
+                    <p style={{ fontSize: '15px', fontWeight: 800, lineHeight: 1.2, color: '#1e293b', marginBottom: '4px' }}>{item.name}</p>
+                    <p style={{ fontSize: '16px', fontWeight: 950, color: '#821a1d' }}>₹{item.price}</p>
                   </div>
-                  {qty === 0 ? (
-                    <button onClick={() => add(item)} style={{ background: '#fef2f2', color: '#821a1d', padding: '10px', borderRadius: '12px', fontSize: '13px', fontWeight: 900, border: '1px solid #fecaca' }}>+ ADD</button>
-                  ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', background: '#f8fafc', borderRadius: '12px', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
-                      <button onClick={() => dec(item.id)} style={{ flex: 1, padding: '10px', fontWeight: 800, fontSize: '20px' }}>−</button>
-                      <span style={{ width: '32px', textAlign: 'center', fontWeight: 900, fontSize: '15px' }}>{qty}</span>
-                      <button onClick={() => add(item)} style={{ flex: 1, padding: '10px', fontWeight: 800, fontSize: '20px' }}>+</button>
-                    </div>
-                  )}
                 </div>
               );
             })}

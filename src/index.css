@@ -50,6 +50,44 @@ input, textarea {
   color: var(--text);
 }
 
+/* Table Status Classes */
+.table-card {
+  transition: all 0.2s ease;
+}
+
+.table-card.status-draft {
+  background: #dbeafe !important; /* Vibrant Blue */
+  border: 2px solid #2563eb !important;
+  box-shadow: 0 8px 16px rgba(37, 99, 235, 0.1) !important;
+}
+
+.table-card.status-kot_pending {
+  background: #fef9c3 !important; /* Vibrant Yellow */
+  border: 2px solid #ca8a04 !important;
+  box-shadow: 0 8px 16px rgba(202, 138, 4, 0.1) !important;
+}
+
+.table-card.status-kot_printed {
+  background: #ffedd5 !important; /* Vibrant Orange */
+  border: 2px solid #ea580c !important;
+  box-shadow: 0 8px 16px rgba(234, 88, 12, 0.1) !important;
+}
+
+.table-card.status-billing {
+  background: #dcfce7 !important; /* Vibrant Green */
+  border: 2px solid #16a34a !important;
+  box-shadow: 0 8px 16px rgba(22, 163, 74, 0.1) !important;
+}
+
+/* Animations */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
 /* hide scrollbar but allow scroll */
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
